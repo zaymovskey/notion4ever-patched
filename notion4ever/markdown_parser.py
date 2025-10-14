@@ -208,6 +208,12 @@ def block_convertor(block:object,depth=0, structured_notion={}, page_id='') -> s
                 outcome_block = f"[{emoji} {outcome_block}"
             elif structured_notion['pages'][block['id']]['icon']:
                 icon = structured_notion['pages'][block['id']]['icon']
+                # Ensure miniicon (child icon) is downloaded locally by adding it
+                # to the current page assets so the downloader replaces its URL.
+                try:
+                    structured_notion["pages"][page_id]["files"].append(icon)
+                except Exception:
+                    pass
                 outcome_block = f"""[<span class="miniicon"> <img src="{icon}"></span> {outcome_block}"""
             else:
                 outcome_block = f"[{outcome_block}"
