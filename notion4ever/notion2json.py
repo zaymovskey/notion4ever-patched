@@ -8,7 +8,7 @@ def update_notion_file(filename:str, notion_json:dict):
     with open(filename, 'w+', encoding='utf-8') as f:
         json.dump(notion_json, f, ensure_ascii=False, indent=4)
 
-def block_parser(block: dict, notion: "notion_client.client.Client")-> dict:
+def block_parser(block: dict, notion: "notion_client.client.Client", filename: str = None, notion_json: dict = None)-> dict:
     """Parses block for obtaining all nested blocks
     
     This function does recursive search over all nested blocks in a given block.
@@ -36,7 +36,11 @@ def block_parser(block: dict, notion: "notion_client.client.Client")-> dict:
                 break  
         
         for child_block in block["children"]:
-            block_parser(child_block, notion)
+            # If nested block is a child_page/child_database, fetch it as a page
+            if child_block.get("type") in ['child_page', 'child_database'] and filename and notion_json:
+                notion_page_parser(child_block['id'], notion, filename, notion_json)
+            else:
+                block_parser(child_block, notion, filename, notion_json)
     return block
 
 def notion_page_parser(page_id: str, notion: "notion_client.client.Client", 
@@ -99,7 +103,7 @@ def notion_page_parser(page_id: str, notion: "notion_client.client.Client",
             if block["type"] in ['page', 'child_page', 'child_database']:
                 notion_page_parser(block['id'], notion, filename, notion_json)
             else:
-                block = block_parser(block, notion)
+                block = block_parser(block, notion, filename, notion_json)
                 notion_json[page['id']]['blocks'][i_block] = block
                 update_notion_file(filename, notion_json)
         elif page_type == 'database':
