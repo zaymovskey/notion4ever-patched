@@ -3,3 +3,9 @@
 *.pyc
 .vscode/settings.json
 *_site/
+.venv/
+notion_content.json
+notion_structured.json
+.idea/
+.vscode/
+__pycache__/

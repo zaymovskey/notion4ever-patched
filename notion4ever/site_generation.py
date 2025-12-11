@@ -64,59 +64,86 @@ def str_to_dt(structured_notion: dict):
 def generate_page(page_id: str, structured_notion: dict, config: dict):
     page = structured_notion["pages"][page_id]
     page_url = page["url"]
-    md_filename = page["title"] + '.md'
+    md_filename = page["title"] + ".md"
+
+    output_dir = Path(config["output_dir"]).resolve()
 
     if config["build_locally"]:
-        folder = urljoin(page_url, '.')
-        local_file_location = str(Path(folder).relative_to(Path(config["output_dir"]).resolve()))
-        html_filename = Path(page_url).name
+        # page["url"] в локальном режиме — это абсолютный путь к HTML-файлу
+        page_path = Path(page_url)
+        folder_path = page_path.parent  # папка, где лежит html страницы
+
+        try:
+            # относительный путь папки страницы относительно _site
+            rel_folder = folder_path.relative_to(output_dir)
+        except ValueError:
+            # если почему-то не внутри _site — сваливаемся в корень
+            rel_folder = Path(".")
+
+        local_file_location = str(rel_folder)
+        html_filename = page_path.name
     else:
-        local_file_location = page_url.lstrip(config["site_url"])
-        html_filename = 'index.html'
+        # режим с SITE_URL — тут всё как было, только подчистим лишние слэши
+        local_file_location = page_url.lstrip(config["site_url"]).lstrip("/")
+        html_filename = "index.html"
 
-    logging.debug(f"🤖 MD {Path(local_file_location) / md_filename}; HTML {Path(local_file_location) / html_filename}")
+    logging.debug(
+        f"🤖 MD {Path(local_file_location) / md_filename}; "
+        f"HTML {Path(local_file_location) / html_filename}"
+    )
 
-    (config["output_dir"] / Path(local_file_location)).mkdir(parents=True, exist_ok=True)
-    with open((config["output_dir"] / Path(local_file_location) / md_filename).resolve(), 'w+', encoding='utf-8') as f:
-        metadata = ("---\n"
-                    f"title: {page['title']}\n"
-                    f"cover: {page['cover']}\n"
-                    f"icon: {page['icon']}\n"
-                    f"emoji: {page['emoji']}\n")
+    base_dir = output_dir / Path(local_file_location)
+    base_dir.mkdir(parents=True, exist_ok=True)
+
+    # Markdown-файл
+    md_path = (base_dir / md_filename).resolve()
+    with open(md_path, "w+", encoding="utf-8") as f:
+        metadata = (
+            "---\n"
+            f"title: {page['title']}\n"
+            f"cover: {page['cover']}\n"
+            f"icon: {page['icon']}\n"
+            f"emoji: {page['emoji']}\n"
+        )
         if "properties_md" in page.keys():
             for p_title, p_md in page["properties_md"].items():
                 metadata += f"{p_title}: {p_md}\n"
-        metadata += f"---\n\n"
-        ### Complex part here
-        md_content = page['md_content']
-        md_content = metadata + md_content
+        metadata += "---\n\n"
 
+        md_content = metadata + page["md_content"]
         f.write(md_content)
 
-    html_content = markdown.markdown(md_content, extensions=["meta", 
-                                                            "tables", 
-                                                            "mdx_truly_sane_lists", 
-                                                            "markdown_captions",
-                                                            "pymdownx.tilde",
-                                                            "pymdownx.tasklist",
-                                                            "pymdownx.superfences"], 
-                                    extension_configs={
-                                                    'mdx_truly_sane_lists': {
-                                                        'nested_indent': 4,
-                                                        'truly_sane': True,
-                                                    },
-                                                    "pymdownx.tasklist":{
-                                                        "clickable_checkbox": True,
-                                                    }
-                                                    })
-                                                                
-    tml = (Path(config["templates_dir"] ) / 'page.html').read_text()
-    with open((config["output_dir"] / Path(local_file_location) / html_filename).resolve(), 'w+', encoding='utf-8')as f:
-        # Specify template folder
+    # HTML из markdown
+    html_content = markdown.markdown(
+        md_content,
+        extensions=[
+            "meta",
+            "tables",
+            "mdx_truly_sane_lists",
+            "markdown_captions",
+            "pymdownx.tilde",
+            "pymdownx.tasklist",
+            "pymdownx.superfences",
+        ],
+        extension_configs={
+            "mdx_truly_sane_lists": {
+                "nested_indent": 4,
+                "truly_sane": True,
+            },
+            "pymdownx.tasklist": {
+                "clickable_checkbox": True,
+            },
+        },
+    )
+
+    tml = (Path(config["templates_dir"]) / "page.html").read_text(encoding="utf-8")
+    html_path = (base_dir / html_filename).resolve()
+    with open(html_path, "w+", encoding="utf-8") as f:
         jinja_loader = jinja2.FileSystemLoader(config["templates_dir"])
         jtemplate = jinja2.Environment(loader=jinja_loader).from_string(tml)
         html_page = jtemplate.render(content=html_content, page=page, site=structured_notion)
         f.write(html_page)
+
 
 def generate_pages(structured_notion: dict, config: dict):
     for page_id, page in structured_notion["pages"].items():

@@ -90,7 +90,7 @@ def main():
     # Stage 1. Downloading (reading) raw notion content and save it to json file
     if Path(filename).exists():
         logging.info("🤖 Reading existing raw notion content.")
-        with open(filename, "r") as f:
+        with open(filename, "r", encoding="utf-8") as f:
             raw_notion = json.load(f)
     else:
         logging.info("🤖 Started raw notion content parsing.")
@@ -110,8 +110,8 @@ def main():
     logging.info(f"🤖 Finished structuring notion data")
     
     if Path(filename_structured).exists():
-        logging.info("🤖 Reading existing raw notion content.")
-        with open(filename_structured, "r") as f:
+        logging.info("🤖 Reading existing structured notion content.")
+        with open(filename_structured, "r", encoding="utf-8") as f:
             structured_notion = json.load(f)
 
     # Stage 3. Generating site from template and data

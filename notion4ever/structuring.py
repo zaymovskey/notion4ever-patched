@@ -196,16 +196,31 @@ def parse_headers(raw_notion: dict) -> dict:
         else:
             notion_pages[page_id]["cover"] = None
 
-        # Icon
-        if type(page["icon"]) is dict:
-            if "emoji" in page["icon"].keys():
-                notion_pages[page_id]["emoji"] = \
-                    page["icon"]["emoji"]
+         # Icon
+        icon_obj = page.get("icon")
+
+        if isinstance(icon_obj, dict):
+            # emoji-иконка
+            if "emoji" in icon_obj:
+                notion_pages[page_id]["emoji"] = icon_obj["emoji"]
                 notion_pages[page_id]["icon"] = None
-            else:
-                icon = page["icon"]["file"]["url"]
+
+            # иконка, хранящаяся в Notion как file
+            elif "file" in icon_obj:
+                icon = icon_obj["file"]["url"]
                 notion_pages[page_id]["icon"] = icon
                 notion_pages[page_id]["files"].append(icon)
+                notion_pages[page_id]["emoji"] = None
+
+            # external-иконка (ссылка наружу) — тоже просто считаем её урлом
+            elif "external" in icon_obj:
+                icon = icon_obj["external"]["url"]
+                notion_pages[page_id]["icon"] = icon
+                notion_pages[page_id]["files"].append(icon)
+                notion_pages[page_id]["emoji"] = None
+
+            else:
+                notion_pages[page_id]["icon"] = None
                 notion_pages[page_id]["emoji"] = None
         else:
             notion_pages[page_id]["icon"] = None
@@ -438,10 +453,26 @@ def download_and_replace_paths(structured_notion:dict, config: dict):
             clean_url = urljoin(file_url, urlparse(file_url).path)
 
             if config["build_locally"]:
-                folder = urljoin(page["url"], '.')
+                # page["url"] тут — абсолютный путь к html-файлу страницы
+                base = Path(config["output_dir"]).resolve()
+                page_path = Path(page["url"])
+                folder = page_path.parent  # папка, где лежит html этой страницы
+
                 filename = unquote(Path(clean_url).name)
-                new_url = urljoin(folder, filename)
-                local_file_location = str(Path(new_url).relative_to(Path(config["output_dir"]).resolve()))
+
+                # Полный путь к файлу рядом со страницей
+                full_local_name = folder / filename
+                new_url = str(full_local_name)
+
+                # Делаем путь относительно output_dir, чтобы дальше код не ломался
+                try:
+                    local_file_location = str(full_local_name.relative_to(base))
+                except ValueError:
+                    # Если по какой-то причине путь не внутри _site —
+                    # кладём файл просто в корень output_dir
+                    full_local_name = base / filename
+                    new_url = str(full_local_name)
+                    local_file_location = filename
             else:
                 filename = unquote(Path(clean_url).name)
                 new_url = urljoin(page["url"] + '/', filename)
