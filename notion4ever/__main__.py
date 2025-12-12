@@ -86,7 +86,6 @@ def main():
         default=os.environ.get("SITE_URL")
     )
 
-    parser.add_argument("--remove_before", "-rb", type=str_to_bool, default=False)
     parser.add_argument("--include_footer", "-if", type=str_to_bool, default=False)
     parser.add_argument("--include_search", "-is", type=str_to_bool, default=False)
 
@@ -108,11 +107,12 @@ def main():
     if not page_ids:
         raise RuntimeError("No notion page id provided. Use -p <page_id>")
 
-    base_output_dir = Path(config["output_dir"])
+    base_output_dir = Path(config["output_dir"]).resolve()
 
-    if config["remove_before"] and base_output_dir.exists():
+    # ✅ ALWAYS CLEAN BUILD: удаляем output_dir целиком перед запуском
+    if base_output_dir.exists():
         shutil.rmtree(base_output_dir)
-        logging.info("🤖 Removed old output directory")
+        logging.info("🧹 Clean build: removed output directory")
 
     notion = Client(auth=config["notion_token"])
     logging.info("🤖 Notion authentication completed")
@@ -130,25 +130,18 @@ def main():
         root_config["notion_page_id"] = root_id
         root_config["output_dir"] = str(root_output_dir)
 
-        # -------- Stage 1: download raw --------
-
+        # -------- Stage 1: download raw (ALWAYS) --------
         raw_notion = {}
 
-        if raw_file.exists():
-            logging.info("🤖 Reading existing raw notion content")
-            with open(raw_file, "r", encoding="utf-8") as f:
-                raw_notion = json.load(f)
-        else:
-            logging.info("🤖 Downloading raw notion content")
-            notion2json.notion_page_parser(
-                root_id,
-                notion=notion,
-                filename=str(raw_file),
-                notion_json=raw_notion
-            )
+        logging.info("📡 Downloading raw notion content (no cache)")
+        notion2json.notion_page_parser(
+            root_id,
+            notion=notion,
+            filename=str(raw_file),
+            notion_json=raw_notion
+        )
 
         # -------- Stage 2: structuring --------
-
         logging.info("🤖 Structuring notion content")
         structured_notion = structuring.structurize_notion_content(
             raw_notion,
@@ -159,13 +152,12 @@ def main():
             json.dump(structured_notion, f, ensure_ascii=False, indent=4)
 
         # -------- Stage 3: site generation --------
-
         if root_config["build_locally"]:
             structured_notion["base_url"] = str(root_output_dir.resolve())
         else:
             structured_notion["base_url"] = root_config["site_url"]
 
-        logging.info(f"🤖 Generating site in {root_output_dir}")
+        logging.info(f"🌍 Generating site in {root_output_dir}")
         site_generation.generate_site(structured_notion, root_config)
 
         logging.info(f"✅ Finished root {root_id}")
