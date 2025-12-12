@@ -11,123 +11,167 @@ import os
 
 from notion_client import Client
 
-# Helper function to handle boolean arguments
+
+# ---------------- helpers ----------------
+
+def normalize_page_ids(items):
+    out = []
+    for item in items or []:
+        if not item:
+            continue
+        s = str(item).strip()
+        if not s:
+            continue
+        for part in s.replace("\n", ",").replace("\r", ",").split(","):
+            part = part.strip()
+            if part:
+                out.append(part)
+
+    seen = set()
+    uniq = []
+    for x in out:
+        if x not in seen:
+            uniq.append(x)
+            seen.add(x)
+    return uniq
+
+
 def str_to_bool(value):
     if isinstance(value, bool):
         return value
-    if value.lower() in {'true', 't', 'yes', 'y', '1'}:
+    if value.lower() in {"true", "t", "yes", "y", "1"}:
         return True
-    elif value.lower() in {'false', 'f', 'no', 'n', '0'}:
+    if value.lower() in {"false", "f", "no", "n", "0"}:
         return False
-    else:
-        raise argparse.ArgumentTypeError(f"Boolean value expected, got {value}")
+    raise argparse.ArgumentTypeError(f"Boolean value expected, got {value}")
+
+
+# ---------------- main ----------------
 
 def main():
-    parser = argparse.ArgumentParser(description=(
-        "Notion4ever: Export all your Notion content to markdown and HTML,"
-        "and serve it as a static site."
-    ))
-    parser.add_argument('--notion_token', '-n', 
-        type=str, help="Set your Notion API token.",
-        default=os.environ.get("NOTION_TOKEN"))
-    parser.add_argument('--notion_page_id', '-p', 
-        type=str, help="Set page_id of the target page.",
-        default=os.environ.get("NOTION_PAGE_ID"))
-    parser.add_argument('--output_dir', '-od', 
-        type=str, default="./_site", 
-        help="Directory to save the generated site.")
-    parser.add_argument('--templates_dir', '-td', 
-        type=str, default="./_templates", 
-        help="Directory containing site templates.")
-    parser.add_argument('--sass_dir', '-sd', 
-        type=str, default="./_sass", 
-        help="Directory for SASS files.")
-    parser.add_argument('--build_locally', '-bl', 
-        type=str_to_bool, default=False, 
-        help="Build the site locally. (true/false)")
-    parser.add_argument('--download_files', '-df', 
-        type=str_to_bool, default=True, 
-        help="Download files. (true/false)")
-    parser.add_argument('--site_url', '-su', 
-        type=str, default=os.environ.get("SITE_URL"), 
-        help="Base URL of the site.")
-    parser.add_argument('--remove_before', '-rb', 
-        type=str_to_bool, default=False, 
-        help="Remove existing files before generating the site. (true/false)")
-    parser.add_argument('--include_footer', '-if', 
-        type=str_to_bool, default=os.environ.get("INCLUDE_FOOTER"), 
-        help="Include a footer in the site. (true/false)")
-    parser.add_argument('--logging_level', '-ll', 
-        type=str, default="INFO", choices=["INFO", "DEBUG"], 
-        help="Logging level.")
-    parser.add_argument('--include_search', '-is', 
-        type=str_to_bool, default=os.environ.get("INCLUDE_SEARCH"), 
-        help="Include a search feature in the site. (true/false)")
-    
+    parser = argparse.ArgumentParser(
+        description="Notion4ever: Export Notion pages to markdown/HTML static site"
+    )
+
+    parser.add_argument(
+        "--notion_token", "-n",
+        type=str,
+        default=os.environ.get("NOTION_TOKEN"),
+        help="Notion API token"
+    )
+
+    parser.add_argument(
+        "--notion_page_id", "-p",
+        action="append",
+        default=[os.environ.get("NOTION_PAGE_ID")] if os.environ.get("NOTION_PAGE_ID") else [],
+        help="Root page id. Можно несколько раз: -p id1 -p id2 или списком: -p 'id1,id2'"
+    )
+
+    parser.add_argument(
+        "--output_dir", "-od",
+        type=str,
+        default="./_site",
+        help="Output directory"
+    )
+
+    parser.add_argument("--templates_dir", "-td", type=str, default="./_templates")
+    parser.add_argument("--sass_dir", "-sd", type=str, default="./_sass")
+
+    parser.add_argument("--build_locally", "-bl", type=str_to_bool, default=False)
+    parser.add_argument("--download_files", "-df", type=str_to_bool, default=True)
+
+    parser.add_argument(
+        "--site_url", "-su",
+        type=str,
+        default=os.environ.get("SITE_URL")
+    )
+
+    parser.add_argument("--remove_before", "-rb", type=str_to_bool, default=False)
+    parser.add_argument("--include_footer", "-if", type=str_to_bool, default=False)
+    parser.add_argument("--include_search", "-is", type=str_to_bool, default=False)
+
+    parser.add_argument(
+        "--logging_level", "-ll",
+        type=str,
+        default="INFO",
+        choices=["INFO", "DEBUG"]
+    )
+
     config = vars(parser.parse_args())
 
-    if config["logging_level"] == "DEBUG":
-        llevel = logging.DEBUG
-    else:
-        llevel = logging.INFO
-    
-    logging.basicConfig(format="%(asctime)s %(levelname)s: %(message)s", 
-                    level=llevel)
+    logging.basicConfig(
+        format="%(asctime)s %(levelname)s: %(message)s",
+        level=logging.DEBUG if config["logging_level"] == "DEBUG" else logging.INFO
+    )
 
-    if config["remove_before"]:
-        if Path(config["output_dir"]).exists():
-            shutil.rmtree(config["output_dir"])
-            logging.debug("🤖 Removed old site files")
+    page_ids = normalize_page_ids(config["notion_page_id"])
+    if not page_ids:
+        raise RuntimeError("No notion page id provided. Use -p <page_id>")
+
+    base_output_dir = Path(config["output_dir"])
+
+    if config["remove_before"] and base_output_dir.exists():
+        shutil.rmtree(base_output_dir)
+        logging.info("🤖 Removed old output directory")
 
     notion = Client(auth=config["notion_token"])
-    logging.info("🤖 Notion authentification completed successfully.")
+    logging.info("🤖 Notion authentication completed")
 
-    # It will rewrite this file
-    raw_notion = {}
-    filename = "./notion_content.json"
-    filename_structured = "./notion_structured.json"
+    for root_id in page_ids:
+        logging.info(f"🧩 === Export root {root_id} ===")
 
-    # Stage 1. Downloading (reading) raw notion content and save it to json file
-    if Path(filename).exists():
-        logging.info("🤖 Reading existing raw notion content.")
-        with open(filename, "r", encoding="utf-8") as f:
-            raw_notion = json.load(f)
-    else:
-        logging.info("🤖 Started raw notion content parsing.")
-        notion2json.notion_page_parser(config["notion_page_id"], 
-                                notion=notion,
-                                filename=filename,
-                                notion_json=raw_notion)
-        logging.info(f"🤖 Downloaded raw notion content. Saved at {filename}")
+        root_output_dir = base_output_dir / f"root_{root_id}"
+        root_output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Stage 2. Structuring data
-    logging.info(f"🤖 Started structuring notion data")
-    structured_notion = structuring.structurize_notion_content(raw_notion,
-                                                            config)
-    with open(filename_structured, "w+", encoding="utf-8") as f:
-        json.dump(structured_notion, f, ensure_ascii=False, indent=4)
+        raw_file = root_output_dir / "notion_content.json"
+        structured_file = root_output_dir / "notion_structured.json"
 
-    logging.info(f"🤖 Finished structuring notion data")
-    
-    if Path(filename_structured).exists():
-        logging.info("🤖 Reading existing structured notion content.")
-        with open(filename_structured, "r", encoding="utf-8") as f:
-            structured_notion = json.load(f)
+        root_config = dict(config)
+        root_config["notion_page_id"] = root_id
+        root_config["output_dir"] = str(root_output_dir)
 
-    # Stage 3. Generating site from template and data
-    if config["build_locally"]:
-        structured_notion['base_url'] = \
-            str(Path(config["output_dir"]).resolve())
-    else:
-        structured_notion['base_url'] = config["site_url"]
+        # -------- Stage 1: download raw --------
 
-    logging.info(("🤖 Started generating site "
-                 f"{'locally' if config['build_locally'] else ''} "
-                 f"to {config['output_dir']}"))
+        raw_notion = {}
 
-    site_generation.generate_site(structured_notion, config)
+        if raw_file.exists():
+            logging.info("🤖 Reading existing raw notion content")
+            with open(raw_file, "r", encoding="utf-8") as f:
+                raw_notion = json.load(f)
+        else:
+            logging.info("🤖 Downloading raw notion content")
+            notion2json.notion_page_parser(
+                root_id,
+                notion=notion,
+                filename=str(raw_file),
+                notion_json=raw_notion
+            )
 
-    logging.info("🤖 Finished generating site.")
+        # -------- Stage 2: structuring --------
+
+        logging.info("🤖 Structuring notion content")
+        structured_notion = structuring.structurize_notion_content(
+            raw_notion,
+            root_config
+        )
+
+        with open(structured_file, "w", encoding="utf-8") as f:
+            json.dump(structured_notion, f, ensure_ascii=False, indent=4)
+
+        # -------- Stage 3: site generation --------
+
+        if root_config["build_locally"]:
+            structured_notion["base_url"] = str(root_output_dir.resolve())
+        else:
+            structured_notion["base_url"] = root_config["site_url"]
+
+        logging.info(f"🤖 Generating site in {root_output_dir}")
+        site_generation.generate_site(structured_notion, root_config)
+
+        logging.info(f"✅ Finished root {root_id}")
+
+    logging.info("🎉 All roots exported successfully")
+
 
 if __name__ == "__main__":
     main()
