@@ -101,12 +101,6 @@ def main():
     parser.add_argument("--build_locally", "-bl", type=str_to_bool, default=False)
     parser.add_argument("--download_files", "-df", type=str_to_bool, default=True)
 
-    parser.add_argument(
-        "--site_url", "-su",
-        type=str,
-        default=os.environ.get("SITE_URL")
-    )
-
     parser.add_argument("--include_footer", "-if", type=str_to_bool, default=False)
     parser.add_argument("--include_search", "-is", type=str_to_bool, default=False)
 
@@ -190,10 +184,7 @@ def main():
             json.dump(structured_notion, f, ensure_ascii=False, indent=4)
 
         # -------- Stage 3: site generation --------
-        if root_config["build_locally"]:
-            structured_notion["base_url"] = str(root_output_dir.resolve())
-        else:
-            structured_notion["base_url"] = root_config["site_url"]
+        structured_notion["base_url"] = str(root_output_dir.resolve())
 
         logging.info(f"🌍 Generating site in {root_output_dir}")
         site_generation.generate_site(structured_notion, root_config)
