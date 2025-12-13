@@ -206,38 +206,45 @@ def parse_family_lines(structured_notion: dict):
 
 
 def generate_urls(page_id: str, structured_notion: dict, config: dict):
-    """Generates url for each page nested in page with 'page_id'."""
-    if page_id == structured_notion["root_page_id"]:
-        if config["build_locally"]:
-            title = structured_notion["pages"][page_id].get("title")
-            f_name = clean_url_string(title, fallback=f"untitled_{page_id[:8]}")
-        else:
-            f_name = "index"
+    """Generate LOCAL file URLs for each page (no publishing/site_url)."""
 
-        f_name += ".html"
+    out_dir = Path(config["output_dir"]).resolve()
+    root_id = structured_notion["root_page_id"]
 
-        f_url = str(Path(config["output_dir"]).resolve() / f_name)
+    def make_unique(url: str) -> str:
+        base = url
+        while url in structured_notion["urls"]:
+            # добавляем "_" перед расширением
+            if url.endswith(".html"):
+                url = url[:-5] + "_" + ".html"
+            else:
+                url = base + "_"
+        return url
 
-        structured_notion["pages"][page_id]["url"] = f_url
-        structured_notion["urls"].append(f_url)
-
+    if page_id == root_id:
+        title = structured_notion["pages"][page_id].get("title")
+        f_name = clean_url_string(title, fallback=f"untitled_{page_id[:8]}")
+        # корень — index.html (как раньше), чтобы было удобно открывать
+        f_name = "index.html"
+        f_url = str((out_dir / f_name).resolve())
     else:
         parent_id = structured_notion["pages"][page_id]["parent"]
-        parent_url = structured_notion["pages"][parent_id]["url"]
+        parent_url = structured_notion["pages"].get(parent_id, {}).get("url")
+
+        # Если по какой-то причине у родителя url ещё нет — считаем его корнем
+        if not parent_url:
+            parent_url = str((out_dir / "index.html").resolve())
 
         title = structured_notion["pages"][page_id].get("title")
         f_name = clean_url_string(title, fallback=f"untitled_{page_id[:8]}")
 
-        f_url = Path(parent_url).parent.resolve()
-        f_url = f_url / f_name / f_name
-        f_url = str(f_url.resolve()) + ".html"
-        while f_url in structured_notion["urls"]:
-            f_name += "_"
-            f_url = Path(parent_url).parent / f_name / f_name
-            f_url = str(f_url.resolve()) + ".html"
+        # Строим путь как в старой локальной ветке: <parent_dir>/<name>/<name>.html
+        parent_dir = Path(parent_url).parent.resolve()
+        f_url = str((parent_dir / f_name / f_name).resolve()) + ".html"
 
-        structured_notion["pages"][page_id]["url"] = f_url
-        structured_notion["urls"].append(f_url)
+    f_url = make_unique(f_url)
+    structured_notion["pages"][page_id]["url"] = f_url
+    structured_notion["urls"].append(f_url)
 
     for child_id in structured_notion["pages"][page_id]["children"]:
         generate_urls(child_id, structured_notion, config)
