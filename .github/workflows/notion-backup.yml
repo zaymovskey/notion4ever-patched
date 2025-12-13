@@ -1,0 +1,85 @@
+name: Notion backup (to private repo)
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Каждое воскресенье в 03:30 UTC
+    - cron: "30 3 * * 0"
+
+concurrency:
+  group: notion-backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    env:
+      NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+      NOTION_PAGE_IDS: ${{ secrets.NOTION_PAGE_IDS }}
+      BACKUP_REPO: ${{ secrets.BACKUP_REPO }}
+      BACKUP_PAT: ${{ secrets.BACKUP_PAT }}
+
+    steps:
+      - name: Checkout exporter repo (public)
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: "pip"
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run export (clean full snapshot)
+        run: |
+          PAGE_ARGS=""
+          IFS=',' read -ra IDS <<< "${NOTION_PAGE_IDS}"
+          for id in "${IDS[@]}"; do
+            id_trimmed="$(echo "$id" | xargs)"
+            if [ -n "$id_trimmed" ]; then
+              PAGE_ARGS="$PAGE_ARGS -p $id_trimmed"
+            fi
+          done
+
+          python -m notion4ever \
+            -n "$NOTION_TOKEN" \
+            $PAGE_ARGS \
+            -od "./_site" \
+            -df true \
+            -bl false \
+            -ll INFO
+
+      - name: Push snapshot to private backup repo
+        run: |
+          set -e
+
+          # Клонируем приватную репу для бэкапа
+          git clone "https://${BACKUP_PAT}@github.com/${BACKUP_REPO}.git" backup-repo
+          cd backup-repo
+
+          # Настраиваем автора коммитов
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Чистим содержимое репы (кроме .git)
+          find . -mindepth 1 -maxdepth 1 ! -name ".git" -exec rm -rf {} +
+
+          # Кладём свежий снапшот
+          mkdir -p snapshot
+          cp -R ../_site snapshot/_site
+
+          # Короткий README в приватной репе
+          cat > README.md << 'EOF'
+          # Notion backup (private)
+          Latest exported snapshot is stored in `snapshot/_site`.
+          EOF
+
+          git add -A
+          git commit -m "backup: $(date -u +'%Y-%m-%dT%H:%M:%SZ')" || echo "No changes to commit"
+          git push
