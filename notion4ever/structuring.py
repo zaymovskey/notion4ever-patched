@@ -244,6 +244,9 @@ def generate_urls(page_id: str, structured_notion: dict, config: dict):
             structured_notion["urls"].append(f_url)
 
         else:
+            parent_url = parent_url or ""
+            if parent_url and not parent_url.endswith("/"):
+                parent_url += "/"
             parent_url = parent_url + "/"
             f_url = urljoin(parent_url, f_name)
             while f_url in structured_notion["urls"]:
