@@ -40,7 +40,7 @@
             {% elif page.type == 'database' %}
             {% include '_gallery.html' %}
             {% else %}
-            {{ content }}
+            {{ content | safe }}
             {% endif %}
             {% endblock page_content %}
           </div>
@@ -60,10 +60,10 @@
         var button = document.createElement('button');
         button.className = 'copy-button';
         button.textContent = 'Copy';
-        
+
         // Add button to pre element (parent of code block)
         codeBlock.parentNode.appendChild(button);
-        
+
         // Add click handler
         button.addEventListener('click', function() {
           // Copy code
@@ -72,7 +72,7 @@
             // Success feedback
             button.textContent = 'Copied!';
             button.classList.add('success');
-            
+
             // Reset after 2 seconds
             setTimeout(function() {
               button.textContent = 'Copy';
@@ -81,7 +81,7 @@
           }).catch(function(err) {
             console.error('Failed to copy:', err);
             button.textContent = 'Error';
-            
+
             // Reset after 2 seconds
             setTimeout(function() {
               button.textContent = 'Copy';
@@ -99,7 +99,7 @@
       const searchIcon = document.querySelector('.search-icon');
       const searchInput = document.getElementById('search-input');
       const searchResults = document.getElementById('search-results');
-      
+
       // Toggle search input
       searchIcon.addEventListener('click', function() {
         const isHidden = searchInput.style.display === 'none';
@@ -130,7 +130,7 @@
         {% else %}
         // For server builds, fetch the index file
         try {
-          const response = await fetch('{{ site.base_url }}/{{ site.search_index }}');
+          cconst response = await fetch('{{ assets_prefix }}{{ site.search_index }}');
           window.searchData = await response.json();
           initializeSearch();
         } catch (error) {

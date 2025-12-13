@@ -8,6 +8,12 @@ from urllib import request
 from itertools import groupby
 import re
 import html
+import os
+
+def _to_site_rel_url(path: Path, *, root_out: Path) -> str:
+    # path и root_out — filesystem пути
+    rel = os.path.relpath(path, start=root_out)
+    return rel.replace(os.sep, "/")
 
 
 def strip_html_tags(text: str) -> str:
@@ -205,48 +211,77 @@ def parse_family_lines(structured_notion: dict):
         page["family_line"] = parse_family_line(page_id, [], structured_notion)
 
 
+def _ensure_posix(rel_path: Path | str) -> str:
+    return Path(rel_path).as_posix()
+
+
+def _unique_url(candidate: str, structured_notion: dict) -> str:
+    """
+    Делает URL уникальным в пределах structured_notion["urls"].
+    Добавляет суффикс _2, _3 ... перед расширением.
+    """
+    if candidate not in structured_notion["urls"]:
+        return candidate
+
+    p = Path(candidate)
+    stem = p.stem
+    suffix = p.suffix  # ".html" обычно
+    parent = p.parent
+
+    i = 2
+    while True:
+        new_name = f"{stem}_{i}{suffix}"
+        new_url = _ensure_posix(parent / new_name) if str(parent) != "." else new_name
+        if new_url not in structured_notion["urls"]:
+            return new_url
+        i += 1
+
+
+def _is_container_page(page: dict) -> bool:
+    """
+    Контейнер = то, что имеет детей, или database.
+    Для контейнеров делаем папку/<index.html>
+    """
+    if page.get("type") == "database":
+        return True
+    return bool(page.get("children"))
+
+
 def generate_urls(page_id: str, structured_notion: dict, config: dict):
-    """Generate LOCAL file URLs for each page (no publishing/site_url)."""
-
-    out_dir = Path(config["output_dir"]).resolve()
+    """
+    Генерит ОТНОСИТЕЛЬНЫЕ urls внутри output_dir.
+    Вложенность восстанавливаем:
+      - контейнеры: <parent_dir>/<slug>/index.html
+      - листья:     <parent_dir>/<slug>.html
+      - root:       index.html
+    """
     root_id = structured_notion["root_page_id"]
-
-    def make_unique(url: str) -> str:
-        base = url
-        while url in structured_notion["urls"]:
-            # добавляем "_" перед расширением
-            if url.endswith(".html"):
-                url = url[:-5] + "_" + ".html"
-            else:
-                url = base + "_"
-        return url
+    pages = structured_notion["pages"]
 
     if page_id == root_id:
-        title = structured_notion["pages"][page_id].get("title")
-        f_name = clean_url_string(title, fallback=f"untitled_{page_id[:8]}")
-        # корень — index.html (как раньше), чтобы было удобно открывать
-        f_name = "index.html"
-        f_url = str((out_dir / f_name).resolve())
+        url = "index.html"
     else:
-        parent_id = structured_notion["pages"][page_id]["parent"]
-        parent_url = structured_notion["pages"].get(parent_id, {}).get("url")
+        page = pages[page_id]
+        parent_id = page.get("parent")
+        parent_page = pages.get(parent_id) if parent_id else None
 
-        # Если по какой-то причине у родителя url ещё нет — считаем его корнем
-        if not parent_url:
-            parent_url = str((out_dir / "index.html").resolve())
+        # Если у родителя нет url — считаем, что родитель это корень
+        parent_url = parent_page.get("url") if parent_page else "index.html"
+        parent_dir = Path(parent_url).parent  # важно: это URL-логика, не FS
 
-        title = structured_notion["pages"][page_id].get("title")
-        f_name = clean_url_string(title, fallback=f"untitled_{page_id[:8]}")
+        title = page.get("title")
+        slug = clean_url_string(title, fallback=f"untitled_{page_id[:8]}")
 
-        # Строим путь как в старой локальной ветке: <parent_dir>/<name>/<name>.html
-        parent_dir = Path(parent_url).parent.resolve()
-        f_url = str((parent_dir / f_name / f_name).resolve()) + ".html"
+        if _is_container_page(page):
+            url = _ensure_posix(parent_dir / slug / "index.html")
+        else:
+            url = _ensure_posix(parent_dir / f"{slug}.html")
 
-    f_url = make_unique(f_url)
-    structured_notion["pages"][page_id]["url"] = f_url
-    structured_notion["urls"].append(f_url)
+    url = _unique_url(url, structured_notion)
+    pages[page_id]["url"] = url
+    structured_notion["urls"].append(url)
 
-    for child_id in structured_notion["pages"][page_id]["children"]:
+    for child_id in pages[page_id].get("children", []):
         generate_urls(child_id, structured_notion, config)
 
 
@@ -377,61 +412,87 @@ def parse_db_entry_properties(raw_notion: dict, structured_notion: dict):
                 logging.debug(f"{ptype} is not supported yet")
 
 
+def _unique_file_path(target: Path) -> Path:
+    """
+    Чтобы файлы не затирали друг друга: pic.png -> pic_2.png -> pic_3.png ...
+    """
+    if not target.exists():
+        return target
+
+    stem = target.stem
+    suffix = target.suffix
+    parent = target.parent
+
+    i = 2
+    while True:
+        cand = parent / f"{stem}_{i}{suffix}"
+        if not cand.exists():
+            return cand
+        i += 1
+
+
 def download_and_replace_paths(structured_notion: dict, config: dict):
+    out_dir = Path(config["output_dir"]).resolve()
+
     for page_id, page in structured_notion["pages"].items():
-        for i_file, file_url in enumerate(page["files"]):
+        page_url = page.get("url")
+        if not page_url:
+            continue
+
+        page_folder_rel = Path(page_url).parent  # URL-относительная папка страницы
+        page_folder_fs = out_dir / page_folder_rel  # FS-папка на диске
+
+        for i_file, file_url in enumerate(list(page.get("files", []))):
             clean_url = urljoin(file_url, urlparse(file_url).path)
-
-            base = Path(config["output_dir"]).resolve()
-            page_path = Path(page["url"])
-            folder = page_path.parent
-
             filename = unquote(Path(clean_url).name)
-            full_local_name = folder / filename
-            new_url = str(full_local_name)
 
-            try:
-                local_file_location = str(full_local_name.relative_to(base))
-            except ValueError:
-                full_local_name = base / filename
-                new_url = str(full_local_name)
-                local_file_location = filename
+            # На всякий: чистим имя файла под винду
+            filename = clean_url_string(filename, fallback="file")
 
-            (config["output_dir"] / Path(local_file_location).parent).mkdir(parents=True, exist_ok=True)
-            full_local_name = Path(config["output_dir"]).resolve() / local_file_location
+            # Кладём файл рядом со страницей (как раньше было по логике)
+            target_fs = page_folder_fs / filename
+            target_fs.parent.mkdir(parents=True, exist_ok=True)
+            target_fs = _unique_file_path(target_fs)
 
-            if full_local_name.exists():
-                logging.debug(f"🤖 {filename} already exists.")
+            # Относительный URL внутри сайта:
+            target_rel_url = _ensure_posix(page_folder_rel / target_fs.name)
+
+            if target_fs.exists():
+                logging.debug(f"🤖 {target_fs.name} already exists.")
             else:
                 try:
-                    request.urlretrieve(file_url, full_local_name)
-                    logging.debug(f"🤖 Downloaded {filename}")
+                    request.urlretrieve(file_url, target_fs)
+                    logging.debug(f"🤖 Downloaded {target_fs.name}")
                 except HTTPError:
-                    logging.warning(f"🤖Cannot download {filename} from link {file_url}.")
+                    logging.warning(f"🤖Cannot download {target_fs.name} from link {file_url}.")
+                    continue
                 except ValueError:
                     continue
 
-            # Replace url in structured_data
-            structured_notion["pages"][page_id]["files"][i_file] = new_url
+            # ✅ structured_data: меняем file_url на ОТНОСИТЕЛЬНЫЙ URL
+            structured_notion["pages"][page_id]["files"][i_file] = target_rel_url
 
-            # Replace url in markdown
+            # ✅ markdown: заменяем ссылку на относительную
             md_content = structured_notion["pages"][page_id].get("md_content", "")
-            structured_notion["pages"][page_id]["md_content"] = md_content.replace(file_url, new_url)
+            structured_notion["pages"][page_id]["md_content"] = md_content.replace(file_url, target_rel_url)
 
-            # Add short description for sites
-            clean_content = strip_html_tags(md_content)
+            # Add short description
+            clean_content = strip_html_tags(structured_notion["pages"][page_id].get("md_content", ""))
             structured_notion["pages"][page_id]["description"] = clean_content[:150]
 
-            # Replace url in header
+            # ✅ header assets
             for asset in ["icon", "cover"]:
                 if page.get(asset) == file_url:
-                    structured_notion["pages"][page_id][asset] = new_url
+                    structured_notion["pages"][page_id][asset] = target_rel_url
 
-            # Replace url in files property:
-            if page["type"] == "db_entry":
+            # ✅ files property in db_entry
+            if page.get("type") == "db_entry":
                 for prop_name, prop_value in structured_notion["pages"][page_id].get("properties_md", {}).items():
                     if file_url in prop_value:
-                        structured_notion["pages"][page_id]["properties_md"][prop_name] = prop_value.replace(file_url, new_url)
+                        structured_notion["pages"][page_id]["properties_md"][prop_name] = prop_value.replace(
+                            file_url, target_rel_url
+                        )
+
 
 
 def sorting_db_entries(structured_notion: dict):

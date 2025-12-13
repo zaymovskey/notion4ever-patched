@@ -176,7 +176,9 @@ def main():
             json.dump(structured_notion, f, ensure_ascii=False, indent=4)
 
         # -------- Stage 3: site generation --------
-        structured_notion["base_url"] = str(root_output_dir.resolve())
+        # base_url — это URL/префикс для ссылок в HTML, а НЕ путь на диске.
+        # Для "архива, не сайта" safest-значение: "."
+        structured_notion["base_url"] = "."
 
         logging.info(f"🌍 Generating site in {root_output_dir}")
         site_generation.generate_site(structured_notion, root_config)

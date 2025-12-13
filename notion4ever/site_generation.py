@@ -1,95 +1,92 @@
 import json
 import logging
+import os
+import re
 import shutil
 from pathlib import Path
-from urllib.parse import urljoin
+from urllib.parse import quote
 
 import dateutil.parser as dt_parser
 import jinja2
 import markdown
 import sass
+from markupsafe import Markup  # ✅ важно
 
 from notion4ever.structuring import clean_url_string
-
-import os
-import re
-from pathlib import Path
-from urllib.parse import quote
 
 _WIN_ABS = re.compile(r"^[a-zA-Z]:[\\/]")
 _POSIX_ABS = re.compile(r"^/")
 
+
+# ---------------------------
+# URL helpers
+# ---------------------------
+
 def _as_url_path(p: str) -> str:
-    # filesystem -> url (слэши + безопасный url-encode)
     p = p.replace("\\", "/")
     return quote(p, safe="/:._-~")
 
-def _strip_output_dir_prefix(target: str, output_dir: Path) -> str:
+
+def _is_remote_url(s: str) -> bool:
+    return s.startswith(("http://", "https://", "data:"))
+
+
+def _assets_prefix(html_path: Path, output_dir: Path) -> str:
     """
-    Если target уже содержит output_dir (абсолютно или как хвост), отрезаем его.
-    Возвращаем путь ВНУТРИ output_dir.
+    Возвращает префикс до корня output_dir (где лежат css/, search_index.json, и т.п.)
+    Примеры:
+      - output_dir/index.html            -> ""
+      - output_dir/Folder/index.html     -> "../"
+      - output_dir/A/B/page.html         -> "../../"
     """
-    t = str(target).replace("\\", "/").strip()
-    out = str(output_dir.resolve()).replace("\\", "/").rstrip("/")
+    out_dir = output_dir.resolve()
+    html_dir = html_path.parent.resolve()
 
-    # abs: C:/.../_site/root_x/download.png -> root_x/download.png (если output_dir=_site)
-    if t.startswith(out + "/"):
-        return t[len(out) + 1 :]
+    rel = os.path.relpath(str(out_dir), start=str(html_dir)).replace(os.sep, "/")
+    if rel == ".":
+        return ""
+    return rel.rstrip("/") + "/"
 
-    # fallback: если где-то встречается "/<output_dir.name>/"
-    needle = "/" + output_dir.name.strip("/\\") + "/"
-    pos = t.find(needle)
-    if pos != -1:
-        return t[pos + len(needle) :]
-
-    return t
 
 def to_rel_url(from_html_path: Path, target: str | None, output_dir: Path) -> str | None:
-    """
-    Делает корректный относительный URL от html файла до target.
-    Работает и на Windows, и на Linux.
-    """
     if not target:
         return target
 
     s = str(target).strip()
+    if not s:
+        return target
 
-    # remote/data — не трогаем
-    if s.startswith(("http://", "https://", "data:")):
+    if _is_remote_url(s):
         return s
 
     out_dir = output_dir.resolve()
     html_dir = from_html_path.parent.resolve()
 
-    # если target содержит output_dir — отрежем
-    s2 = _strip_output_dir_prefix(s, out_dir)
-
-    # если target абсолютный FS путь — relpath от html_dir
-    if _WIN_ABS.match(s2) or _POSIX_ABS.match(s2) or Path(s2).is_absolute():
-        rel = os.path.relpath(s2, start=str(html_dir))
+    # 1) абсолютный FS путь -> relpath от html_dir
+    if _WIN_ABS.match(s) or _POSIX_ABS.match(s) or Path(s).is_absolute():
+        rel = os.path.relpath(s, start=str(html_dir))
         return _as_url_path(rel)
 
-    # иначе считаем, что это путь внутри output_dir
-    fs_target = (out_dir / s2.lstrip("/")).resolve()
+    # 2) иначе считаем, что это путь внутри output_dir
+    fs_target = (out_dir / s.lstrip("/")).resolve()
     rel = os.path.relpath(str(fs_target), start=str(html_dir))
     return _as_url_path(rel)
 
+
 def rewrite_abs_src_href(html: str, html_path: Path, output_dir: Path) -> str:
-    """
-    Чинит src/href в html_content, если markdown->html уже вставил абсолютные FS пути.
-    """
     def repl(m):
         attr = m.group(1)
         url = m.group(2)
         fixed = to_rel_url(html_path, url, output_dir)
         return f'{attr}="{fixed}"'
-
     return re.sub(r'(src|href)\s*=\s*"([^"]+)"', repl, html)
 
 
+# ---------------------------
+# build helpers
+# ---------------------------
 
 def verify_templates(config: dict):
-    """Verifies existense and content of sass and templates dirs."""
     sass_dir = Path(config["sass_dir"])
     templates_dir = Path(config["templates_dir"])
 
@@ -105,118 +102,117 @@ def verify_templates(config: dict):
 
 
 def generate_css(config: dict):
-    """Generates css file (compiling sass files in the output_dir folder)."""
     out_css = Path(config["output_dir"]) / "css"
     out_css.mkdir(parents=True, exist_ok=True)
     sass.compile(dirname=(config["sass_dir"], out_css))
 
 
-def generate_404(structured_notion: dict, config: dict):
-    """Generates 404 html page."""
-    out_dir = Path(config["output_dir"]).resolve()
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    tml = (Path(config["templates_dir"]) / "404.html").read_text(encoding="utf-8")
-    jinja_loader = jinja2.FileSystemLoader(config["templates_dir"])
-    jtml = jinja2.Environment(loader=jinja_loader).from_string(tml)
-    html_page = jtml.render(content="", site=structured_notion)
-
-    path_404 = out_dir / "404.html"
-    path_404.parent.mkdir(parents=True, exist_ok=True)
-    with open(path_404, "w+", encoding="utf-8") as f:
-        f.write(html_page)
-
-
-def generate_archive(structured_notion: dict, config: dict):
-    """Generates archive page."""
-    out_dir = Path(config["output_dir"]).resolve()
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    if config["build_locally"]:
-        archive_link = "Archive.html"
-        structured_notion["archive_url"] = str(out_dir / archive_link)
-        archive_path = out_dir / archive_link
-    else:
-        archive_link = "Archive/index.html"
-        structured_notion["archive_url"] = urljoin(structured_notion["base_url"], archive_link)
-        archive_path = out_dir / "Archive" / "index.html"
-
-    archive_path.parent.mkdir(parents=True, exist_ok=True)
-
-    tml = (Path(config["templates_dir"]) / "archive.html").read_text(encoding="utf-8")
-    jinja_loader = jinja2.FileSystemLoader(config["templates_dir"])
-    jtemplate = jinja2.Environment(loader=jinja_loader).from_string(tml)
-    html_page = jtemplate.render(content="", site=structured_notion)
-
-    with open(archive_path, "w+", encoding="utf-8") as f:
-        f.write(html_page)
+def _jinja_env(templates_dir: str | Path) -> jinja2.Environment:
+    loader = jinja2.FileSystemLoader(str(templates_dir))
+    # ✅ autoescape оставляем (это правильно), а контент помечаем Markup
+    return jinja2.Environment(loader=loader, autoescape=True)
 
 
 def str_to_dt(structured_notion: dict):
     for page_id, page in structured_notion["pages"].items():
         for field in ["date", "date_end", "last_edited_time"]:
-            if field in page:
+            if field in page and page[field]:
                 structured_notion["pages"][page_id][field] = dt_parser.isoparse(page[field])
 
 
+def _render_template(template_name: str, *, templates_dir: str, **ctx) -> str:
+    env = _jinja_env(templates_dir)
+    tml = (Path(templates_dir) / template_name).read_text(encoding="utf-8")
+    tpl = env.from_string(tml)
+    return tpl.render(**ctx)
+
+
+def generate_404(structured_notion: dict, config: dict):
+    out_dir = Path(config["output_dir"]).resolve()
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    path_404 = out_dir / "404.html"
+    path_404.parent.mkdir(parents=True, exist_ok=True)
+
+    assets_prefix = _assets_prefix(path_404, out_dir)
+
+    html_page = _render_template(
+        "404.html",
+        templates_dir=config["templates_dir"],
+        content=Markup(""),
+        site=structured_notion,
+        assets_prefix=assets_prefix,
+    )
+    path_404.write_text(html_page, encoding="utf-8")
+
+
+def generate_archive(structured_notion: dict, config: dict):
+    out_dir = Path(config["output_dir"]).resolve()
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    archive_rel = "Archive/index.html"
+    structured_notion["archive_url"] = archive_rel
+
+    archive_path = out_dir / archive_rel
+    archive_path.parent.mkdir(parents=True, exist_ok=True)
+
+    assets_prefix = _assets_prefix(archive_path, out_dir)
+
+    html_page = _render_template(
+        "archive.html",
+        templates_dir=config["templates_dir"],
+        content=Markup(""),
+        site=structured_notion,
+        assets_prefix=assets_prefix,
+    )
+    archive_path.write_text(html_page, encoding="utf-8")
+
+    # плоская совместимость (не обязательно)
+    if config.get("build_locally", True):
+        flat = out_dir / "Archive.html"
+        flat.write_text(
+            '<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="0; url=Archive/index.html">',
+            encoding="utf-8",
+        )
+
+
+# ---------------------------
+# page generation
+# ---------------------------
+
 def generate_page(page_id: str, structured_notion: dict, config: dict):
     page = structured_notion["pages"][page_id]
-    page_url = page["url"]
-
-    # ✅ Сейвим md-имя от Windows/URL-символов и пустых тайтлов
-    md_filename = clean_url_string(page.get("title"), fallback=f"untitled_{page_id[:8]}") + ".md"
 
     output_dir = Path(config["output_dir"]).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # page["url"] в локальном режиме — абсолютный путь к HTML-файлу
-    page_path = Path(page_url)
+    page_url = page.get("url")
+    if not page_url:
+        raise RuntimeError(f"Page {page_id} has no url")
 
-    # Иногда page_url может быть странным — страхуемся
-    try:
-        folder_path = page_path.parent
-    except Exception:
-        folder_path = output_dir
+    # 🔥 пишем строго по page["url"]
+    html_path = output_dir / page_url
+    html_path.parent.mkdir(parents=True, exist_ok=True)
 
-    try:
-        rel_folder = folder_path.relative_to(output_dir)
-    except ValueError:
-        rel_folder = Path(".")
+    # md рядом с html
+    md_path = html_path.with_suffix(".md")
 
-    local_file_location = str(rel_folder)
-    html_filename = clean_url_string(page_path.name, fallback="index")  # на всякий
-
-    logging.debug(
-        f"🤖 MD {Path(local_file_location) / md_filename}; "
-        f"HTML {Path(local_file_location) / html_filename}"
+    metadata = (
+        "---\n"
+        f"title: {page.get('title')}\n"
+        f"cover: {page.get('cover')}\n"
+        f"icon: {page.get('icon')}\n"
+        f"emoji: {page.get('emoji')}\n"
     )
+    if "properties_md" in page:
+        for p_title, p_md in page["properties_md"].items():
+            metadata += f"{p_title}: {p_md}\n"
+    metadata += "---\n\n"
 
-    base_dir = (output_dir / Path(local_file_location)).resolve()
-    base_dir.mkdir(parents=True, exist_ok=True)
+    md_content = metadata + (page.get("md_content") or "")
+    md_path.write_text(md_content, encoding="utf-8")
 
-    # ✅ Markdown
-    md_path = (base_dir / md_filename).resolve()
-    md_path.parent.mkdir(parents=True, exist_ok=True)
-
-    with open(md_path, "w+", encoding="utf-8") as f:
-        metadata = (
-            "---\n"
-            f"title: {page.get('title')}\n"
-            f"cover: {page.get('cover')}\n"
-            f"icon: {page.get('icon')}\n"
-            f"emoji: {page.get('emoji')}\n"
-        )
-
-        if "properties_md" in page:
-            for p_title, p_md in page["properties_md"].items():
-                metadata += f"{p_title}: {p_md}\n"
-
-        metadata += "---\n\n"
-
-        md_content = metadata + (page.get("md_content") or "")
-        f.write(md_content)
-
-    # ✅ HTML
+    # markdown -> html body
     html_content = markdown.markdown(
         md_content,
         extensions=[
@@ -239,30 +235,28 @@ def generate_page(page_id: str, structured_notion: dict, config: dict):
         },
     )
 
-    tml = (Path(config["templates_dir"]) / "page.html").read_text(encoding="utf-8")
-    html_path = (base_dir / html_filename).resolve()
-    html_path.parent.mkdir(parents=True, exist_ok=True)
-
-    output_dir = Path(config["output_dir"]).resolve()
-
-    # ✅ чинит <img src="C:\..."> и <a href="C:\..."> внутри контента
+    # чинит абсолютные src/href, если они протекли
     html_content = rewrite_abs_src_href(html_content, html_path, output_dir)
 
-    # ✅ чинит cover/icon, если они были filesystem path
+    # cover/icon делаем относительными к текущей html
     page_for_template = dict(page)
     page_for_template["cover"] = to_rel_url(html_path, page.get("cover"), output_dir)
-    page_for_template["icon"]  = to_rel_url(html_path, page.get("icon"),  output_dir)
+    page_for_template["icon"] = to_rel_url(html_path, page.get("icon"), output_dir)
 
-    with open(html_path, "w+", encoding="utf-8") as f:
-        jinja_loader = jinja2.FileSystemLoader(config["templates_dir"])
-        jtemplate = jinja2.Environment(loader=jinja_loader).from_string(tml)
-        html_page = jtemplate.render(content=html_content, page=page_for_template, site=structured_notion)
-        f.write(html_page)
+    assets_prefix = _assets_prefix(html_path, output_dir)
 
+    html_page = _render_template(
+        "page.html",
+        templates_dir=config["templates_dir"],
+        content=Markup(html_content),  # ✅ чтобы не печатались <h1> как текст
+        page=page_for_template,
+        site=structured_notion,
+        assets_prefix=assets_prefix,   # ✅ для css/js/search
+    )
+    html_path.write_text(html_page, encoding="utf-8")
 
 
 def generate_pages(structured_notion: dict, config: dict):
-    # ✅ Чтобы один сломанный документ не убивал весь бэкап
     for page_id in structured_notion["pages"].keys():
         try:
             generate_page(page_id, structured_notion, config)
@@ -271,17 +265,19 @@ def generate_pages(structured_notion: dict, config: dict):
 
 
 def generate_search_index(structured_notion: dict, config: dict):
-    """Generates search index file if building for server"""
-    if not config["build_locally"] and structured_notion.get("search_index"):
-        out_dir = Path(config["output_dir"]).resolve()
-        out_dir.mkdir(parents=True, exist_ok=True)
+    if not structured_notion.get("search_index"):
+        return
 
-        search_index_path = out_dir / "search_index.json"
-        with open(search_index_path, "w", encoding="utf-8") as f:
-            json.dump(structured_notion["search_index"], f, ensure_ascii=False)
+    out_dir = Path(config["output_dir"]).resolve()
+    out_dir.mkdir(parents=True, exist_ok=True)
 
-        # Update the search_index to just contain the path
-        structured_notion["search_index"] = "search_index.json"
+    search_index_path = out_dir / "search_index.json"
+    search_index_path.write_text(
+        json.dumps(structured_notion["search_index"], ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    structured_notion["search_index"] = "search_index.json"
 
 
 def generate_site(structured_notion: dict, config: dict):
@@ -291,8 +287,11 @@ def generate_site(structured_notion: dict, config: dict):
     generate_css(config)
     logging.debug("🤖 SASS translated to CSS folder.")
 
-    generate_search_index(structured_notion, config)
-    logging.debug("🤖 Generated search index file.")
+    if config.get("include_search"):
+        generate_search_index(structured_notion, config)
+        logging.debug("🤖 Generated search index file.")
+    else:
+        structured_notion["search_index"] = ""
 
     out_dir = Path(config["output_dir"]).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
