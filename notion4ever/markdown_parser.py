@@ -46,7 +46,7 @@ def code(information:dict) -> str:
     input: item:dict = {"language":str,"text":str,"caption":str}
     """
     code_block = f"```{information['language'].replace(' ', '_')}\n{information['text']}\n```"
-    
+
     if 'caption' in information and information['caption']:
         return f"<figcaption>{information['caption']}</figcaption>\n{code_block}"
     return code_block
@@ -176,7 +176,7 @@ def information_collector(payload:dict, structured_notion: dict, page_id) -> dic
             structured_notion["pages"][page_id]["files"].append(payload['external']['url'])
     if "language" in payload:
         information['language'] = payload['language']
-    
+
     # internal url
     if "file" in payload:
         information['url'] = payload['file']['url']
@@ -185,7 +185,7 @@ def information_collector(payload:dict, structured_notion: dict, page_id) -> dic
         is_webm = clean_url.endswith(".webm") or clean_url.endswith(".mp4")
         if "dont_download" not in payload or is_webm:
             structured_notion["pages"][page_id]["files"].append(payload['file']['url'])
-    
+
     # table cells
     if "cells" in payload:
         information['cells'] = payload['cells']
@@ -207,19 +207,13 @@ def block_convertor(block:object,depth=0, structured_notion={}, page_id='') -> s
                 emoji = structured_notion['pages'][block['id']]['emoji']
                 outcome_block = f"[{emoji} {outcome_block}"
             elif structured_notion['pages'][block['id']]['icon']:
-                icon = structured_notion['pages'][block['id']]['icon']
-                # Predict the final local path for the child's icon so we don't
-                # need to add it to the parent's download list.
-                child_url = structured_notion['pages'][block['id']]['url']
-                clean_url = urljoin(icon, urlparse(icon).path)
-                filename = unquote(Path(clean_url).name)
-                # Mirror download_and_replace_paths logic for both local and server builds
-                if child_url.startswith('http'):
-                    folder = child_url.rstrip('/') + '/'
-                else:
-                    folder = urljoin(child_url, '.')
-                miniicon_url = urljoin(folder, filename)
-                outcome_block = f"""[<span class=\"miniicon\"> <img src=\"{miniicon_url}\"></span> {outcome_block}"""
+                # ВАЖНО: icon уже может быть переписан на локальный относительный URL
+                # в structuring.download_and_replace_paths() (и уже учитывает _2/_3 коллизии).
+                miniicon_url = structured_notion['pages'][block['id']]['icon']
+
+                outcome_block = (
+                    f"""[<span class=\"miniicon\"> <img src=\"{miniicon_url}\"></span> {outcome_block}"""
+                )
             else:
                 outcome_block = f"[{outcome_block}"
 
@@ -228,11 +222,11 @@ def block_convertor(block:object,depth=0, structured_notion={}, page_id='') -> s
                 if block_type in ["embed", "video"]:
                     block[block_type]["dont_download"] = True
                 outcome_block = \
-                    block_type_map[block_type](information_collector(block[block_type], 
+                    block_type_map[block_type](information_collector(block[block_type],
                         structured_notion, page_id)) + "\n\n"
             else:
                 outcome_block = f"[{block_type} is not supported]\n\n"
-            
+
             if block_type == "code":
                 outcome_block = outcome_block.rstrip('\n').replace('\n', '\n'+'\t'*depth)
                 outcome_block += '\n\n'
@@ -246,8 +240,8 @@ def block_convertor(block:object,depth=0, structured_notion={}, page_id='') -> s
                         cell_block_type = cell_block['type']
                         table_list.append(block_type_map[cell_block_type](
                             information_collector(
-                                cell_block[cell_block_type], 
-                                structured_notion, 
+                                cell_block[cell_block_type],
+                                structured_notion,
                                 page_id)))
                     # convert to markdown table
                     for index,value in enumerate(table_list):
@@ -261,8 +255,8 @@ def block_convertor(block:object,depth=0, structured_notion={}, page_id='') -> s
                     depth += 1
                     child_blocks = block["children"]
                     for block in child_blocks:
-                        # This is needed, because notion thinks, that if 
-                        # the page contains numbered list, header 1 will be the 
+                        # This is needed, because notion thinks, that if
+                        # the page contains numbered list, header 1 will be the
                         # child block for it, which is strange.
                         if block['type'] == "heading_1":
                             print(f"DEPTH {depth}")
@@ -342,7 +336,7 @@ def mention_information(payload:dict):
             information['content'] = payload['href']
     else:
         information['content'] = payload['plain_text']
-    
+
     return information
 
 mention_map = {
