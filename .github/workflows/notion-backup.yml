@@ -52,7 +52,7 @@ jobs:
             $PAGE_ARGS \
             -od "./_site" \
             -df true \
-            -bl false \
+            -bl true \
             -ll INFO
 
       - name: Push snapshot to private backup repo

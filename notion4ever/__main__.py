@@ -70,6 +70,8 @@ def str_to_bool(value):
 # ---------------- main ----------------
 
 def main():
+    global CURRENT_PAGE_PREFIX
+
     parser = argparse.ArgumentParser(
         description="Notion4ever: Export Notion pages to markdown/HTML static site"
     )
