@@ -11,8 +11,29 @@ import os
 
 from notion_client import Client
 
+# ---------------- logging page prefix ----------------
+
+CURRENT_PAGE_PREFIX = "-"
+
+
+class PagePrefixFilter(logging.Filter):
+    def filter(self, record):
+        record.page_prefix = CURRENT_PAGE_PREFIX
+        return True
+
 
 # ---------------- helpers ----------------
+
+def get_page_title(notion: Client, page_id: str) -> str:
+    try:
+        page = notion.pages.retrieve(page_id=page_id)
+        title_prop = page.get("properties", {}).get("title", {})
+        title_items = title_prop.get("title", [])
+        if title_items:
+            return "".join(t.get("plain_text", "") for t in title_items)
+    except Exception:
+        pass
+    return page_id
 
 def normalize_page_ids(items):
     out = []
@@ -98,10 +119,24 @@ def main():
 
     config = vars(parser.parse_args())
 
+    CURRENT_PAGE_PREFIX = "-"
+
+    old_factory = logging.getLogRecordFactory()
+
+    def record_factory(*args, **kwargs):
+        record = old_factory(*args, **kwargs)
+        # поле будет всегда, даже для httpx/urllib/чего угодно
+        record.page_prefix = CURRENT_PAGE_PREFIX
+        return record
+
+    logging.setLogRecordFactory(record_factory)
+
     logging.basicConfig(
-        format="%(asctime)s %(levelname)s: %(message)s",
+        format="[%(page_prefix)s] %(levelname)s: %(message)s",
         level=logging.DEBUG if config["logging_level"] == "DEBUG" else logging.INFO
     )
+
+    logging.getLogger().addFilter(PagePrefixFilter())
 
     page_ids = normalize_page_ids(config["notion_page_id"])
     if not page_ids:
@@ -117,8 +152,11 @@ def main():
     notion = Client(auth=config["notion_token"])
     logging.info("🤖 Notion authentication completed")
 
-    for root_id in page_ids:
-        logging.info(f"🧩 === Export root {root_id} ===")
+    total_roots = len(page_ids)
+
+    for idx, root_id in enumerate(page_ids, start=1):
+        title = get_page_title(notion, root_id)
+        CURRENT_PAGE_PREFIX = f"{title} {idx}/{total_roots}"
 
         root_output_dir = base_output_dir / f"root_{root_id}"
         root_output_dir.mkdir(parents=True, exist_ok=True)
