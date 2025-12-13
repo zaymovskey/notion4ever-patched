@@ -36,7 +36,6 @@ jobs:
           python -m pip install --upgrade pip
           pip uninstall -y notion4ever || true
           pip install -r requirements.txt
-          pip install -e .
 
       - name: Debug import paths
         run: |
@@ -54,7 +53,7 @@ jobs:
             fi
           done
 
-          python -m notion4ever \
+          PYTHONPATH="$GITHUB_WORKSPACE" python -m notion4ever \
             -n "$NOTION_TOKEN" \
             $PAGE_ARGS \
             -od "./_site" \
