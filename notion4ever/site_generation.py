@@ -169,26 +169,22 @@ def generate_page(page_id: str, structured_notion: dict, config: dict):
     output_dir = Path(config["output_dir"]).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    if config["build_locally"]:
-        # page["url"] в локальном режиме — абсолютный путь к HTML-файлу
-        page_path = Path(page_url)
+    # page["url"] в локальном режиме — абсолютный путь к HTML-файлу
+    page_path = Path(page_url)
 
-        # Иногда page_url может быть странным — страхуемся
-        try:
-            folder_path = page_path.parent
-        except Exception:
-            folder_path = output_dir
+    # Иногда page_url может быть странным — страхуемся
+    try:
+        folder_path = page_path.parent
+    except Exception:
+        folder_path = output_dir
 
-        try:
-            rel_folder = folder_path.relative_to(output_dir)
-        except ValueError:
-            rel_folder = Path(".")
+    try:
+        rel_folder = folder_path.relative_to(output_dir)
+    except ValueError:
+        rel_folder = Path(".")
 
-        local_file_location = str(rel_folder)
-        html_filename = clean_url_string(page_path.name, fallback="index")  # на всякий
-    else:
-        local_file_location = page_url.lstrip(config["site_url"]).lstrip("/")
-        html_filename = "index.html"
+    local_file_location = str(rel_folder)
+    html_filename = clean_url_string(page_path.name, fallback="index")  # на всякий
 
     logging.debug(
         f"🤖 MD {Path(local_file_location) / md_filename}; "

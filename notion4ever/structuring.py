@@ -216,10 +216,7 @@ def generate_urls(page_id: str, structured_notion: dict, config: dict):
 
         f_name += ".html"
 
-        if config["build_locally"]:
-            f_url = str(Path(config["output_dir"]).resolve() / f_name)
-        else:
-            f_url = config["site_url"]
+        f_url = str(Path(config["output_dir"]).resolve() / f_name)
 
         structured_notion["pages"][page_id]["url"] = f_url
         structured_notion["urls"].append(f_url)
@@ -231,30 +228,16 @@ def generate_urls(page_id: str, structured_notion: dict, config: dict):
         title = structured_notion["pages"][page_id].get("title")
         f_name = clean_url_string(title, fallback=f"untitled_{page_id[:8]}")
 
-        if config["build_locally"]:
-            f_url = Path(parent_url).parent.resolve()
-            f_url = f_url / f_name / f_name
+        f_url = Path(parent_url).parent.resolve()
+        f_url = f_url / f_name / f_name
+        f_url = str(f_url.resolve()) + ".html"
+        while f_url in structured_notion["urls"]:
+            f_name += "_"
+            f_url = Path(parent_url).parent / f_name / f_name
             f_url = str(f_url.resolve()) + ".html"
-            while f_url in structured_notion["urls"]:
-                f_name += "_"
-                f_url = Path(parent_url).parent / f_name / f_name
-                f_url = str(f_url.resolve()) + ".html"
 
-            structured_notion["pages"][page_id]["url"] = f_url
-            structured_notion["urls"].append(f_url)
-
-        else:
-            parent_url = parent_url or ""
-            if parent_url and not parent_url.endswith("/"):
-                parent_url += "/"
-            parent_url = parent_url + "/"
-            f_url = urljoin(parent_url, f_name)
-            while f_url in structured_notion["urls"]:
-                f_name += "_"
-                f_url = urljoin(parent_url, f_name)
-
-            structured_notion["pages"][page_id]["url"] = f_url
-            structured_notion["urls"].append(f_url)
+        structured_notion["pages"][page_id]["url"] = f_url
+        structured_notion["urls"].append(f_url)
 
     for child_id in structured_notion["pages"][page_id]["children"]:
         generate_urls(child_id, structured_notion, config)
@@ -392,26 +375,20 @@ def download_and_replace_paths(structured_notion: dict, config: dict):
         for i_file, file_url in enumerate(page["files"]):
             clean_url = urljoin(file_url, urlparse(file_url).path)
 
-            if config["build_locally"]:
-                base = Path(config["output_dir"]).resolve()
-                page_path = Path(page["url"])
-                folder = page_path.parent
+            base = Path(config["output_dir"]).resolve()
+            page_path = Path(page["url"])
+            folder = page_path.parent
 
-                filename = unquote(Path(clean_url).name)
-                full_local_name = folder / filename
+            filename = unquote(Path(clean_url).name)
+            full_local_name = folder / filename
+            new_url = str(full_local_name)
+
+            try:
+                local_file_location = str(full_local_name.relative_to(base))
+            except ValueError:
+                full_local_name = base / filename
                 new_url = str(full_local_name)
-
-                try:
-                    local_file_location = str(full_local_name.relative_to(base))
-                except ValueError:
-                    full_local_name = base / filename
-                    new_url = str(full_local_name)
-                    local_file_location = filename
-            else:
-                filename = unquote(Path(clean_url).name)
-                new_url = urljoin(page["url"] + "/", filename)
-
-                local_file_location = new_url.replace(config["site_url"], "", 1).lstrip("/")
+                local_file_location = filename
 
             (config["output_dir"] / Path(local_file_location).parent).mkdir(parents=True, exist_ok=True)
             full_local_name = Path(config["output_dir"]).resolve() / local_file_location
