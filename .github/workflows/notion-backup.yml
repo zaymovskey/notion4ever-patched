@@ -34,8 +34,14 @@ jobs:
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
+          pip uninstall -y notion4ever || true
           pip install -r requirements.txt
           pip install -e .
+
+      - name: Debug import paths
+        run: |
+          python -c "import notion4ever; import notion4ever.structuring as s; print('notion4ever:', notion4ever.__file__); print('structuring:', s.__file__)"
+          python -c "import notion4ever.structuring as s, inspect; src = inspect.getsource(s.generate_urls); print('HAS parent_url + /:', 'parent_url = parent_url + \"/\"' in src)"
 
       - name: Run export (clean full snapshot)
         run: |
