@@ -1,6 +1,7 @@
 from notion4ever import notion2json
 from notion4ever import structuring
 from notion4ever import site_generation
+from notion4ever.log_context import PageContextFilter, ROOT_PREFIX
 
 import logging
 import json
@@ -8,18 +9,10 @@ from pathlib import Path
 import shutil
 import argparse
 import os
+from notion4ever.log_context import PageContextFilter, ROOT_PREFIX, install_log_record_factory
+
 
 from notion_client import Client
-
-# ---------------- logging page prefix ----------------
-
-CURRENT_PAGE_PREFIX = "-"
-
-
-class PagePrefixFilter(logging.Filter):
-    def filter(self, record):
-        record.page_prefix = CURRENT_PAGE_PREFIX
-        return True
 
 
 # ---------------- helpers ----------------
@@ -30,10 +23,11 @@ def get_page_title(notion: Client, page_id: str) -> str:
         title_prop = page.get("properties", {}).get("title", {})
         title_items = title_prop.get("title", [])
         if title_items:
-            return "".join(t.get("plain_text", "") for t in title_items)
+            return "".join(t.get("plain_text", "") for t in title_items).strip() or page_id
     except Exception:
         pass
     return page_id
+
 
 def normalize_page_ids(items):
     out = []
@@ -70,8 +64,6 @@ def str_to_bool(value):
 # ---------------- main ----------------
 
 def main():
-    global CURRENT_PAGE_PREFIX
-
     parser = argparse.ArgumentParser(
         description="Notion4ever: Export Notion pages to markdown/HTML static site"
     )
@@ -100,7 +92,8 @@ def main():
     parser.add_argument("--templates_dir", "-td", type=str, default="./_templates")
     parser.add_argument("--sass_dir", "-sd", type=str, default="./_sass")
 
-    parser.add_argument("--build_locally", "-bl", type=str_to_bool, default=False)
+    # Ты уже решил: публикации сайта нет, значит локальный режим — дефолт.
+    parser.add_argument("--build_locally", "-bl", type=str_to_bool, default=True)
     parser.add_argument("--download_files", "-df", type=str_to_bool, default=True)
 
     parser.add_argument("--include_footer", "-if", type=str_to_bool, default=False)
@@ -114,33 +107,26 @@ def main():
     )
 
     config = vars(parser.parse_args())
+    install_log_record_factory()
 
-    CURRENT_PAGE_PREFIX = "-"
-
-    old_factory = logging.getLogRecordFactory()
-
-    def record_factory(*args, **kwargs):
-        record = old_factory(*args, **kwargs)
-        # поле будет всегда, даже для httpx/urllib/чего угодно
-        record.page_prefix = CURRENT_PAGE_PREFIX
-        return record
-
-    logging.setLogRecordFactory(record_factory)
-
+    # ---- logging ----
     logging.basicConfig(
         format="[%(page_prefix)s] %(levelname)s: %(message)s",
         level=logging.DEBUG if config["logging_level"] == "DEBUG" else logging.INFO
     )
+    root_logger = logging.getLogger()
+    for h in root_logger.handlers:
+        h.addFilter(PageContextFilter())
+    # один фильтр, который заполняет page_prefix для ВСЕХ логов (включая httpx)
 
-    logging.getLogger().addFilter(PagePrefixFilter())
-
+    # ---- parse ids ----
     page_ids = normalize_page_ids(config["notion_page_id"])
     if not page_ids:
         raise RuntimeError("No notion page id provided. Use -p <page_id>")
 
     base_output_dir = Path(config["output_dir"]).resolve()
 
-    # ✅ ALWAYS CLEAN BUILD: удаляем output_dir целиком перед запуском
+    # ✅ ALWAYS CLEAN BUILD
     if base_output_dir.exists():
         shutil.rmtree(base_output_dir)
         logging.info("🧹 Clean build: removed output directory")
@@ -152,7 +138,11 @@ def main():
 
     for idx, root_id in enumerate(page_ids, start=1):
         title = get_page_title(notion, root_id)
-        CURRENT_PAGE_PREFIX = f"{title} {idx}/{total_roots}"
+
+        # Root-префикс: виден в каждом логе во время обработки этого root
+        ROOT_PREFIX.set(f"{title} {idx}/{total_roots}")
+
+        logging.info(f"🧩 === Export root {root_id} ===")
 
         root_output_dir = base_output_dir / f"root_{root_id}"
         root_output_dir.mkdir(parents=True, exist_ok=True)
